@@ -47,6 +47,9 @@ async fn main() {
             colors::CYAN,
             &format!("📁 Target directory: {}", target_dir.display()),
         );
+        if args.preserve_namespace {
+            display::log(colors::CYAN, "📂 Preserve namespace: enabled");
+        }
         display::log(
             colors::CYAN,
             &format!(
@@ -87,6 +90,9 @@ async fn main() {
         }
         if args.switch_to_default {
             display::log(colors::CYAN, "🔄 Switch to default branch: enabled");
+        }
+        if args.preserve_namespace {
+            display::log(colors::CYAN, "📂 Preserve namespace: enabled");
         }
         display::log(
             colors::CYAN,

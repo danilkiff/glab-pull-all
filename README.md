@@ -100,6 +100,12 @@ glab-pull-all --group my-group --gitlab-url https://gitlab.example.com
 - Cannot specify both `--pull-from-default` and `--switch-to-default`
 - Thread count must be >= 1
 
+**Preserve namespace:**
+- Without `-p`, every project is cloned into a flat `<dir>/<project-name>` directory (unchanged default)
+- With `-p`, projects go to `<dir>/<group>/<subgroup>/<project>`, which avoids name clashes between subgroups
+- Use the same `-p` setting for later runs, including `--delete`; existing clones are not moved between layouts
+- Directories that are not git clones (e.g. a namespace folder) are never pulled or deleted
+
 ## Authentication
 
 Authentication is resolved in the following priority order:
