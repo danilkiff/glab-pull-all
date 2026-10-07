@@ -487,7 +487,7 @@ mod runner_tests {
 mod version_tests {
     #[test]
     fn test_version_is_not_empty() {
-        assert!(!glab_pull_all::VERSION.is_empty());
+        assert_ne!(glab_pull_all::VERSION, "");
     }
 
     #[test]
