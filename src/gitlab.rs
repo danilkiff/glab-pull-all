@@ -22,6 +22,8 @@ pub struct RepoInfo {
 #[derive(Debug, Deserialize)]
 struct GitLabProject {
     name: String,
+    /// Optional so that the default flat layout never depends on it.
+    #[serde(default)]
     path_with_namespace: String,
     http_url_to_repo: String,
     ssh_url_to_repo: String,
@@ -131,10 +133,13 @@ impl From<GitLabProject> for RepoInfo {
 
 impl RepoInfo {
     /// Clone into `path_with_namespace` instead of the flat `name` directory,
-    /// like `glab repo clone --preserve-namespace`.
+    /// like `glab repo clone --preserve-namespace`. Keeps the flat directory
+    /// if the API response had no `path_with_namespace`.
     #[must_use]
     pub fn with_preserved_namespace(mut self) -> Self {
-        self.local_path.clone_from(&self.path_with_namespace);
+        if !self.path_with_namespace.is_empty() {
+            self.local_path.clone_from(&self.path_with_namespace);
+        }
         self
     }
 }
@@ -320,6 +325,14 @@ mod tests {
             .with_preserved_namespace();
         assert_eq!(repo.local_path, "g/sub/a");
         assert_eq!(repo.name, "a");
+    }
+
+    #[test]
+    fn test_parse_without_path_with_namespace() {
+        let input = r#"[{"name":"a","http_url_to_repo":"https://gitlab.com/g/a.git","ssh_url_to_repo":"git@gitlab.com:g/a.git","web_url":"https://gitlab.com/g/a","visibility":"public"}]"#;
+        let repo = RepoInfo::from(parse_paginated_projects(input).unwrap().remove(0));
+        assert_eq!(repo.local_path, "a");
+        assert_eq!(repo.with_preserved_namespace().local_path, "a");
     }
 
     #[test]
