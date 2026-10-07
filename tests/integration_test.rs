@@ -235,18 +235,20 @@ mod preserve_namespace_tests {
     use super::*;
     use std::process::Command;
 
+    fn git(args: &[&str], cwd: &std::path::Path) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     /// Create a local bare repository with one commit and return its path.
     fn make_origin(root: &std::path::Path) -> std::path::PathBuf {
         let work = root.join("work");
         std::fs::create_dir_all(&work).unwrap();
-        let git = |args: &[&str], cwd: &std::path::Path| {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(cwd)
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?} failed");
-        };
         git(&["init", "-q", "-b", "main"], &work);
         git(&["config", "user.email", "t@example.com"], &work);
         git(&["config", "user.name", "t"], &work);
@@ -333,6 +335,119 @@ mod preserve_namespace_tests {
             git_ops::process_repo(&r, &target, false, None, false, false, true, &|_| {}).await;
         assert!(result.success, "{}", result.message);
         assert!(!nested.exists());
+    }
+
+    fn repo_at(origin: &std::path::Path, local_path: &str) -> RepoInfo {
+        RepoInfo {
+            local_path: local_path.to_string(),
+            ..repo(origin, false)
+        }
+    }
+
+    async fn sync(repo: &RepoInfo, target: &std::path::Path) -> git_ops::GitResult {
+        git_ops::process_repo(repo, target, false, None, false, false, false, &|_| {}).await
+    }
+
+    async fn delete(repo: &RepoInfo, target: &std::path::Path) -> git_ops::GitResult {
+        git_ops::process_repo(repo, target, false, None, false, false, true, &|_| {}).await
+    }
+
+    #[tokio::test]
+    async fn test_delete_removes_empty_namespace_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = make_origin(tmp.path());
+        let target = tmp.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let a = repo_at(&origin, "group/sub/a");
+        let b = repo_at(&origin, "group/sub/b");
+        assert!(sync(&a, &target).await.success);
+        assert!(sync(&b, &target).await.success);
+
+        assert_eq!(delete(&a, &target).await.op_type, OpType::Deleted);
+        assert!(target.join("group/sub/b/.git").is_dir());
+
+        assert_eq!(delete(&b, &target).await.op_type, OpType::Deleted);
+        assert!(!target.join("group").exists());
+        assert!(target.is_dir());
+    }
+
+    /// A namespace directory created by `--preserve-namespace` (here `group/`)
+    /// can share its name with a flat clone directory. If the target directory
+    /// lives inside another git repository, git commands run in `group/` would
+    /// act on that enclosing repository instead.
+    #[tokio::test]
+    async fn test_namespace_dir_is_not_treated_as_clone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = make_origin(tmp.path());
+        let workspace = tmp.path().join("workspace");
+        git(
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                workspace.to_str().unwrap(),
+            ],
+            tmp.path(),
+        );
+        std::fs::write(workspace.join(".git/info/exclude"), "/target/\n").unwrap();
+        let target = workspace.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let nested = repo_at(&origin, "group/sub/project");
+        assert!(sync(&nested, &target).await.success);
+        let wip = target.join("group/sub/project/wip.txt");
+        std::fs::write(&wip, "uncommitted work").unwrap();
+
+        // New upstream commit that a `git pull` in the workspace would fetch.
+        let work = tmp.path().join("work");
+        std::fs::write(work.join("NEW"), "y").unwrap();
+        git(&["add", "."], &work);
+        git(&["commit", "-q", "-m", "second"], &work);
+        git(&["push", "-q", origin.to_str().unwrap(), "main"], &work);
+        let workspace_head = git(&["rev-parse", "HEAD"], &workspace);
+
+        let flat = repo_at(&origin, "group");
+        let result = sync(&flat, &target).await;
+        assert!(!result.success, "{}", result.message);
+        assert!(result.message.contains("not a git repository"));
+        assert_eq!(git(&["rev-parse", "HEAD"], &workspace), workspace_head);
+
+        let result = delete(&flat, &target).await;
+        assert_eq!(result.op_type, OpType::Skipped, "{}", result.message);
+        assert!(wip.is_file());
+    }
+
+    #[tokio::test]
+    async fn test_rejects_paths_outside_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = make_origin(tmp.path());
+        let target = tmp.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let outside = tmp.path().join("outside");
+        git(
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                outside.to_str().unwrap(),
+            ],
+            tmp.path(),
+        );
+
+        let escaping = RepoInfo {
+            path_with_namespace: "../escaped".to_string(),
+            ..repo(&origin, false)
+        }
+        .with_preserved_namespace();
+        let result = sync(&escaping, &target).await;
+        assert_eq!(result.op_type, OpType::Failed);
+        assert!(!tmp.path().join("escaped").exists());
+
+        for local_path in ["../outside", outside.to_str().unwrap()] {
+            let result = delete(&repo_at(&origin, local_path), &target).await;
+            assert_eq!(result.op_type, OpType::Failed, "{local_path}");
+            assert!(outside.join(".git").is_dir(), "{local_path}");
+        }
     }
 }
 
