@@ -81,10 +81,8 @@ pub async fn get_repos_from_glab_cli(
             "groups/{}/projects?per_page=100&include_subgroups=true",
             urlencoding(group)
         )
-    } else if let Some(user) = user {
-        format!("users/{}/projects?per_page=100", urlencoding(user))
     } else {
-        return None;
+        format!("users/{}/projects?per_page=100", urlencoding(user?))
     };
 
     let output = Command::new("glab")
